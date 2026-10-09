@@ -22,8 +22,8 @@ use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::IngressPolicy;
 use rocketmq_security_api::LayerEvaluation;
 use rocketmq_security_api::RequestPolicy;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 use rocketmq_transport::api::TransportSecurity;
 
 /// Low-cardinality authorization classes for every NameServer request.
@@ -98,7 +98,7 @@ pub struct NameServerTransportPolicy;
 
 /// Builds the NameServer transport boundary selected by a validated bootstrap outcome.
 ///
-/// A [`SecurityBootstrapOutcome::Disabled`] result selects the legacy
+/// A [`SecurityBootstrapValidation::Disabled`] result selects the legacy
 /// development-compatible transport behavior. It is an explicit migration
 /// choice, not a validated loopback-listener proof. A validated development
 /// outcome has already proved every supplied listener is loopback-only.
@@ -108,10 +108,10 @@ pub struct NameServerTransportPolicy;
 /// library targets use the exact same outcome-to-transport projection.
 #[doc(hidden)]
 #[must_use]
-pub fn build_namesrv_transport_security(outcome: SecurityBootstrapOutcome) -> Arc<TransportSecurity> {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+pub fn build_namesrv_transport_security(validation: SecurityBootstrapValidation) -> Arc<TransportSecurity> {
+    match validation {
+        SecurityBootstrapValidation::Disabled => Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::SecureEnforced => Arc::new(
                 TransportSecurity::secure_enforced(None, None).with_ingress_policy(Arc::new(NameServerTransportPolicy)),
             ),
