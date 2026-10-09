@@ -60,8 +60,8 @@ use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 use rocketmq_security_api::SecurityContractViolation;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TlsMode;
@@ -433,11 +433,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle, 
         rocketmq_runtime::RuntimeComponent::NameServer,
     )
     .record_business_drain(if shutdown_request.deadline.is_expired() {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::DeadlineExceeded
     } else if boot_result.as_ref().is_ok_and(|report| report.is_healthy()) {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Drained
     } else {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Failed
     });
     let telemetry_report = match telemetry_flush_lease {
         Some(lease) => {
@@ -482,7 +482,7 @@ fn validate_namesrv_security(
     controller_config: Option<&EmbeddedControllerConfig>,
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<SecurityBootstrapOutcome> {
+) -> Result<SecurityBootstrapValidation> {
     let bind_ip = server_config
         .bind_address
         .parse::<IpAddr>()
@@ -506,8 +506,8 @@ fn validate_namesrv_security(
         listeners.push(probe_bind_addr);
     }
     let has_public_listener = listeners.iter().any(|listener| !listener.ip().is_loopback());
-    let outcome = match security_bootstrap.validate(&listeners) {
-        Ok(outcome) => outcome,
+    let validation = match security_bootstrap.validate(&listeners) {
+        Ok(validation) => validation,
         Err(error)
             if error
                 .source()
@@ -519,7 +519,7 @@ fn validate_namesrv_security(
         Err(error) => return Err(error.into()),
     };
 
-    if matches!(outcome, SecurityBootstrapOutcome::Disabled)
+    if matches!(validation, SecurityBootstrapValidation::Disabled)
         && has_public_listener
         && !namesrv_config.allow_insecure_public_listener
     {
@@ -528,7 +528,7 @@ fn validate_namesrv_security(
         );
     }
 
-    if matches!(outcome, SecurityBootstrapOutcome::Validated(validated) if validated.profile() == SecurityBootstrapProfile::SecureEnforced)
+    if matches!(validation, SecurityBootstrapValidation::Validated(validated) if validated.profile() == SecurityBootstrapProfile::SecureEnforced)
     {
         if namesrv_config.allow_insecure_public_listener {
             bail!("allowInsecurePublicListener is incompatible with the secure-enforced profile");
@@ -549,15 +549,15 @@ fn validate_namesrv_security(
         }
     }
 
-    Ok(outcome)
+    Ok(validation)
 }
 
-fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => {
+fn log_security_bootstrap(validation: SecurityBootstrapValidation) {
+    match validation {
+        SecurityBootstrapValidation::Disabled => {
             tracing::warn!("NameServer security bootstrap is disabled because no security profile is configured")
         }
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
                 profile = validated.profile().as_str(),
                 listener_count = validated.listener_count(),
@@ -1225,7 +1225,7 @@ mod tests {
 
     #[test]
     fn disabled_security_bootstrap_allows_public_listener_by_default() {
-        let outcome = validate_namesrv_security(
+        let validation = validate_namesrv_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &NamesrvConfig::default(),
             &ServerConfig::default(),
@@ -1234,7 +1234,7 @@ mod tests {
             None,
         )
         .expect("the default compatibility mode should allow the legacy public listener");
-        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+        assert_eq!(validation, rocketmq_security_api::SecurityBootstrapValidation::Disabled);
 
         let namesrv = NamesrvConfig {
             allow_insecure_public_listener: false,
@@ -1413,11 +1413,11 @@ mod tests {
         let mut server = server;
         server.tls_config.enable = true;
         server.tls_config.server.mode = TlsMode::Enforcing;
-        let outcome = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
+        let validation = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
             .expect("complete secure profile should validate");
         assert!(matches!(
-            outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::SecureEnforced
         ));
     }
@@ -1441,14 +1441,14 @@ mod tests {
         };
         server.tls_config.enable = true;
         server.tls_config.server.mode = TlsMode::Enforcing;
-        let outcome = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
+        let validation = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
             .expect("secure bootstrap should validate before installing transport security");
         assert!(matches!(
-            outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            validation,
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::SecureEnforced && validated.listener_count() == 1
         ));
-        let transport_security = build_namesrv_transport_security(outcome);
+        let transport_security = build_namesrv_transport_security(validation);
         assert!(transport_security.is_secure_enforced());
         assert_eq!(
             transport_security.authorize_ingress(
@@ -1488,7 +1488,7 @@ mod tests {
         .expect("development bootstrap should validate its loopback listener");
         assert!(matches!(
             development_outcome,
-            SecurityBootstrapOutcome::Validated(validated)
+            SecurityBootstrapValidation::Validated(validated)
                 if validated.profile() == SecurityBootstrapProfile::DevelopmentInsecureLoopback
                     && validated.listener_count() == 1
         ));
@@ -1517,7 +1517,7 @@ mod tests {
             None,
         )
         .expect("explicit Disabled migration mode should select compatibility transport");
-        assert_eq!(disabled_outcome, SecurityBootstrapOutcome::Disabled);
+        assert_eq!(disabled_outcome, SecurityBootstrapValidation::Disabled);
         let disabled = build_namesrv_transport_security(disabled_outcome);
         assert!(!disabled.is_secure_enforced());
     }
