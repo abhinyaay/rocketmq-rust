@@ -117,12 +117,12 @@ impl SecurityBootstrap {
     pub fn validate(
         &self,
         listener_addresses: &[SocketAddr],
-    ) -> Result<SecurityBootstrapOutcome, SecurityProviderError> {
+    ) -> Result<SecurityBootstrapValidation, SecurityProviderError> {
         match self {
-            Self::Disabled => Ok(SecurityBootstrapOutcome::Disabled),
+            Self::Disabled => Ok(SecurityBootstrapValidation::Disabled),
             Self::Enabled(config) => config
                 .validate(listener_addresses)
-                .map(SecurityBootstrapOutcome::Validated),
+                .map(SecurityBootstrapValidation::Validated),
         }
     }
 }
@@ -319,18 +319,24 @@ impl SecurityBootstrapConfig {
 /// Returns [`SecurityProviderError`] for every incomplete, unsupported, unsafe, or unavailable profile.
 pub fn validate_security_bootstrap_from_env(
     listener_addresses: &[SocketAddr],
-) -> Result<SecurityBootstrapOutcome, SecurityProviderError> {
+) -> Result<SecurityBootstrapValidation, SecurityProviderError> {
     SecurityBootstrapConfig::from_env()
         .map_err(SecurityProviderError::from)?
         .validate(listener_addresses)
 }
 
-/// Result of resolving and, when enabled, validating process security bootstrap.
+/// Non-sensitive evidence produced by pre-bind process security bootstrap validation.
+///
+/// Returned before listener binding. Neither variant installs TLS, binds
+/// listeners, starts authentication, or authorizes any request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecurityBootstrapOutcome {
-    /// Represents the disabled case.
+pub enum SecurityBootstrapValidation {
+    /// The resolved bootstrap was disabled; records only that enabled-profile
+    /// pre-bind checks were deliberately skipped. Not proof that supplied
+    /// listeners are loopback-only.
     Disabled,
-    /// Represents the validated case.
+    /// Pre-bind validation passed for the selected profile; carries only the
+    /// profile and supplied listener count (see [`ValidatedSecurityBootstrap`]).
     Validated(ValidatedSecurityBootstrap),
 }
 
