@@ -53,8 +53,8 @@ use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityBootstrapValidation;
 use tracing::info;
 
 use controller_security::build_controller_security;
@@ -410,11 +410,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         rocketmq_runtime::RuntimeComponent::Controller,
     )
     .record_business_drain(if shutdown_request.deadline.is_expired() {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::DeadlineExceeded
     } else if controller_result.is_ok() {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Drained
     } else {
-        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainStatus::Failed
     });
     let telemetry_report = match telemetry_flush_lease {
         Some(lease) => {
@@ -458,7 +458,7 @@ fn validate_controller_security(
     controller_config: &ControllerConfig,
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<SecurityBootstrapOutcome> {
+) -> Result<SecurityBootstrapValidation> {
     if security_bootstrap.requires_authentication()
         && (!controller_config.authentication_enabled || !controller_config.authorization_enabled)
     {
@@ -479,12 +479,12 @@ fn validate_controller_security(
     security_bootstrap.validate(&listeners).map_err(anyhow::Error::from)
 }
 
-fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
-    match outcome {
-        SecurityBootstrapOutcome::Disabled => {
+fn log_security_bootstrap(validation: SecurityBootstrapValidation) {
+    match validation {
+        SecurityBootstrapValidation::Disabled => {
             tracing::warn!("Controller security bootstrap is disabled because no security profile is configured")
         }
-        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+        SecurityBootstrapValidation::Validated(validated) => match validated.profile() {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
                 profile = validated.profile().as_str(),
                 listener_count = validated.listener_count(),
@@ -851,7 +851,7 @@ mod tests {
 
     #[test]
     fn disabled_security_bootstrap_allows_default_controller_listeners() {
-        let outcome = validate_controller_security(
+        let validation = validate_controller_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &ControllerConfig::default(),
             None,
@@ -859,7 +859,7 @@ mod tests {
         )
         .expect("disabled security bootstrap should not restrict Controller listeners");
 
-        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+        assert_eq!(validation, rocketmq_security_api::SecurityBootstrapValidation::Disabled);
     }
 
     #[test]
